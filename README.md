@@ -51,8 +51,7 @@ cargo run --release
 
 ### 示例
 
-![Example Output](IMG_3293_dbs.png)
-*(注意：请确保项目根目录下有示例图片，或者替换此占位符)*
+![Example Output](diagram.png)
 
 ## ⚙️ 配置
 
