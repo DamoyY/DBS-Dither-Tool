@@ -1,34 +1,28 @@
+use anyhow::{Context as _, Result};
 use core::{
     ops::{Add as _, Neg as _},
     ptr::NonNull,
     sync::atomic::{AtomicI32, Ordering},
 };
+use image::{DynamicImage, GenericImageView as _, GrayImage, ImageBuffer, Luma, RgbImage};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use rand::Rng as _;
+use rayon::prelude::*;
+use serde::Deserialize;
 use std::{
     fs,
     io::{self, Write as _},
     path::Path,
     time::Instant,
 };
-
-use anyhow::{Context as _, Result};
-use image::{DynamicImage, GenericImageView as _, GrayImage, ImageBuffer, Luma, RgbImage};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rand::Rng as _;
-use rayon::prelude::*;
-use serde::Deserialize;
-
 #[derive(Debug, Deserialize, Clone, Copy)]
 struct Config {
     hvs_sigma: f32,
     hvs_kernel_size: i32,
 }
-
 #[derive(Clone, Copy)]
 struct DbsContextPtr(NonNull<DbsContext>);
-// SAFETY: DbsContextPtr is a wrapper around a raw pointer to DbsContext.
-// DbsContext is Send and Sync, so this is safe.
 unsafe impl Send for DbsContextPtr {}
-// SAFETY: Same as above.
 unsafe impl Sync for DbsContextPtr {}
 const FIXED_FRAC_BITS: i32 = 16;
 const FIXED_ONE: i64 = 1_i64 << FIXED_FRAC_BITS;
@@ -108,7 +102,6 @@ impl DbsContext {
             .saturating_add(self.padding);
         py.saturating_mul(self.padded_width).saturating_add(px)
     }
-
     fn new(img: &GrayImage, config: Config) -> Self {
         let (width, height) = img.dimensions();
         let kernel = generate_hvs_kernel(config.hvs_kernel_size, config.hvs_sigma);
@@ -169,7 +162,6 @@ impl DbsContext {
         ctx.initialize_error_map();
         ctx
     }
-
     #[inline]
     fn get_kernel_weight(&self, dx: i32, dy: i32) -> i64 {
         let idx = (dy.saturating_add(self.kernel_radius))
@@ -181,7 +173,6 @@ impl DbsContext {
             .copied()
             .unwrap_or(0)
     }
-
     #[inline]
     fn get_autocorr(&self, dx: i32, dy: i32) -> i64 {
         let autocorr_radius = self.kernel.autocorr_size.div_euclid(2);
@@ -194,7 +185,6 @@ impl DbsContext {
             .copied()
             .unwrap_or(0)
     }
-
     fn initialize_error_map(&mut self) {
         let diff: Vec<i64> = self
             .halftone
@@ -267,7 +257,6 @@ impl DbsContext {
                 }
             });
     }
-
     #[inline]
     fn calc_toggle_delta_se(&self, xx: u32, yy: u32) -> i64 {
         let idx = self.pixel_index(xx, yy);
@@ -277,7 +266,6 @@ impl DbsContext {
         let term1 = fixed_mul(2_i64.saturating_mul(change), e2);
         term1.saturating_add(self.kernel.c_pp)
     }
-
     #[inline]
     fn apply_toggle(&mut self, xx: u32, yy: u32) {
         let idx = self.pixel_index(xx, yy);
@@ -314,7 +302,6 @@ impl DbsContext {
             }
         }
     }
-
     fn can_swap(&self, x1: u32, y1: u32, x2: u32, y2: u32) -> bool {
         let idx1 = self.pixel_index(x1, y1);
         let idx2 = self.pixel_index(x2, y2);
@@ -323,7 +310,6 @@ impl DbsContext {
         let half_fixed = FIXED_ONE.div_euclid(2);
         val1.saturating_sub(val2).abs() >= half_fixed
     }
-
     fn swap_bounds(p1: (i32, i32), p2: (i32, i32), kernel_radius: i32) -> (i32, i32, i32, i32) {
         let (x1, y1) = p1;
         let (x2, y2) = p2;
@@ -333,7 +319,6 @@ impl DbsContext {
         let max_y = y1.max(y2).saturating_add(kernel_radius);
         (min_x, max_x, min_y, max_y)
     }
-
     fn calc_swap_delta_e(
         &self,
         point: (i32, i32),
@@ -363,7 +348,6 @@ impl DbsContext {
         }
         Some(delta_e)
     }
-
     #[inline]
     fn calc_swap_delta_se(&self, x1: u32, y1: u32, x2: u32, y2: u32) -> i64 {
         let idx1 = self.pixel_index(x1, y1);
@@ -390,7 +374,6 @@ impl DbsContext {
             .saturating_add(term3)
             .saturating_add(term4)
     }
-
     #[inline]
     fn apply_swap(&mut self, x1: u32, y1: u32, x2: u32, y2: u32) {
         let idx1 = self.pixel_index(x1, y1);
@@ -473,7 +456,6 @@ impl DbsContext {
             }
         }
     }
-
     fn try_best_operation(&mut self, xx: u32, yy: u32) -> Option<bool> {
         const NEIGHBORS: [(i32, i32); 8] = [
             (1, 0),
@@ -525,7 +507,6 @@ impl DbsContext {
             None => None,
         }
     }
-
     fn compute_block_size(&self) -> u32 {
         let autocorr_radius = self.kernel.autocorr_size.div_euclid(2);
         let max_radius = self.kernel_radius.max(autocorr_radius);
@@ -533,7 +514,6 @@ impl DbsContext {
             .unwrap_or(64)
             .max(1)
     }
-
     fn generate_blocks(&self, shift_x: i32, shift_y: i32, block_size: u32) -> [Vec<Block>; 4] {
         let mut phases: [Vec<Block>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
         let width_i32 = i32::try_from(self.width).unwrap_or(0_i32);
@@ -581,7 +561,6 @@ impl DbsContext {
         }
         phases
     }
-
     fn process_block(&mut self, block: &Block) -> (i32, i32) {
         let mut toggles = 0_i32;
         let mut swaps = 0_i32;
@@ -725,7 +704,7 @@ fn load_config() -> Result<Config> {
     let config_content = fs::read_to_string(config_path)
         .with_context(|| format!("无法读取配置文件: {config_path}"))?;
     let config: Config =
-        serde_yaml::from_str(&config_content).with_context(|| "解析配置文件失败")?;
+        serde_saphyr::from_str(&config_content).with_context(|| "解析配置文件失败")?;
     println!(
         "配置已加载: Sigma={}, KernelSize={}",
         config.hvs_sigma, config.hvs_kernel_size
@@ -759,8 +738,6 @@ fn run_dbs_iterations(dbs: &mut DbsContext, pb: &ProgressBar) -> (i32, i32) {
             let iter_s_ref = &iter_swaps;
             phase_blocks.par_iter().for_each(move |block| {
                 let dbs_ptr_inner = dbs_ptr;
-                // SAFETY: We process blocks in phases where blocks in the same phase
-                // do not overlap their influence regions.
                 let dbs_ref = unsafe { &mut *dbs_ptr_inner.0.as_ptr() };
                 let (block_toggles, block_swaps) = dbs_ref.process_block(block);
                 iter_t_ref.fetch_add(block_toggles, Ordering::Relaxed);
@@ -791,7 +768,6 @@ fn run_dbs_iterations(dbs: &mut DbsContext, pb: &ProgressBar) -> (i32, i32) {
     }
     (toggle_count, swap_count)
 }
-
 fn create_progress_bar(total_pixels: u64) -> Result<ProgressBar> {
     let pb = ProgressBar::new(total_pixels);
     pb.set_style(
@@ -802,7 +778,6 @@ fn create_progress_bar(total_pixels: u64) -> Result<ProgressBar> {
     );
     Ok(pb)
 }
-
 fn perform_dbs_with_progress(
     img: &GrayImage,
     config: Config,
@@ -815,7 +790,6 @@ fn perform_dbs_with_progress(
     pb.finish_with_message(format!("{channel_name} 完成"));
     (dbs, toggles, swaps)
 }
-
 fn perform_dbs_on_channel(
     img: &GrayImage,
     config: Config,
@@ -826,7 +800,6 @@ fn perform_dbs_on_channel(
     let pb = create_progress_bar(total_pixels)?;
     Ok(perform_dbs_with_progress(img, config, channel_name, &pb))
 }
-
 fn process_mono(img: &DynamicImage, config: Config) -> Result<(DynamicImage, i32, i32)> {
     let (width, height) = img.dimensions();
     let gray_img = img.to_luma8();
